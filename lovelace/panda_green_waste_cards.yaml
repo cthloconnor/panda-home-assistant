@@ -42,34 +42,14 @@ views:
                   action: call-service
                   service: script.panda_order_food_waste_bin
           - type: markdown
-            title: Today
+            title: Calendar Next 10 Days
             content: >-
-              {% set entries = state_attr('sensor.panda_green_waste_today_services', 'entries') or [] %}
-              {% if entries %}
-              {% for entry in entries %}
-              - **{{ entry.subject }}**
-                {% if entry.start %} at {{ as_datetime(entry.start).strftime('%H:%M') }}{% endif %}
-                {% if entry.status %} — {{ entry.status }}{% endif %}
-              {% endfor %}
-              {% else %}
-              No Panda entries for today.
-              {% endif %}
-          - type: markdown
-            title: Upcoming
-            content: >-
-              {% set entries = state_attr('sensor.panda_green_waste_upcoming_services', 'entries') or [] %}
-              {% if entries %}
-              {% for entry in entries[:6] %}
-              - **{{ entry.subject }}** — {{ as_datetime(entry.start).strftime('%d %b %Y') }}
-                {% if entry.status %} — {{ entry.status }}{% endif %}
-              {% endfor %}
-              {% else %}
-              No upcoming Panda entries found.
-              {% endif %}
+              {{ state_attr('sensor.panda_calendar_next_10_days', 'summary') or 'No Panda calendar entries in the next 10 days.' }}
           - type: entities
             title: Panda Sensors
             entities:
               - entity: sensor.panda_last_ordered_collection
+              - entity: sensor.panda_calendar_next_10_days
               - entity: sensor.panda_green_waste_next_collection
               - entity: sensor.panda_green_waste_today_services
               - entity: sensor.panda_green_waste_upcoming_services

@@ -25,6 +25,90 @@ panda_green_waste:
               {{ states('input_text.panda_last_ordered_access_window') }}
             ordered_at: >
               {{ states('input_text.panda_last_ordered_at') }}
+        - name: Panda Calendar Next 10 Days
+          unique_id: panda_calendar_next_10_days
+          state: >
+            {% set entries = state_attr('sensor.panda_green_waste_upcoming_services', 'entries') or [] %}
+            {% set today = now().date() %}
+            {% set cutoff = today + timedelta(days=9) %}
+            {% set ns = namespace(count=0) %}
+            {% for entry in entries %}
+              {% set start = entry.start if entry.start is defined else none %}
+              {% if start %}
+                {% set entry_date = as_datetime(start).date() %}
+                {% if today <= entry_date <= cutoff %}
+                  {% set ns.count = ns.count + 1 %}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.count }}
+          attributes:
+            summary: >
+              {% set entries = state_attr('sensor.panda_green_waste_upcoming_services', 'entries') or [] %}
+              {% set today = now().date() %}
+              {% set cutoff = today + timedelta(days=9) %}
+              {% set ns = namespace(lines=[]) %}
+              {% for offset in range(0, 10) %}
+                {% set day = today + timedelta(days=offset) %}
+                {% set route_visits = namespace(items=[]) %}
+                {% set lift_events = namespace(items=[]) %}
+                {% for entry in entries %}
+                  {% set start = entry.start if entry.start is defined else none %}
+                  {% if start and as_datetime(start).date() == day %}
+                    {% set subject = (entry.subject if entry.subject is defined else '') %}
+                    {% set friendly = subject
+                      | replace('RTSC4413266', 'MSW Municipal Mixed')
+                      | replace('RTSC4413265', 'Mixed Packaging') %}
+                    {% if friendly.startswith('Route Visit:') %}
+                      {% set route_visits.items = route_visits.items + [friendly | replace('Route Visit:', '') | trim] %}
+                    {% elif friendly.startswith('Lift Event:') %}
+                      {% set lift_events.items = lift_events.items + [friendly | replace('Lift Event:', '') | trim] %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+                {% if route_visits.items or lift_events.items %}
+                  {% set lines = [day.strftime('%d/%m/%Y')] %}
+                  {% if route_visits.items %}
+                    {% set lines = lines + ['Route Visit: ' ~ (route_visits.items | join(', '))] %}
+                  {% endif %}
+                  {% if lift_events.items %}
+                    {% set lines = lines + ['Lift Event: ' ~ (lift_events.items | join(', '))] %}
+                  {% endif %}
+                  {% set ns.lines = ns.lines + [lines | join('\n')] %}
+                {% endif %}
+              {% endfor %}
+              {{ ns.lines | join('\n\n') if ns.lines else 'No Panda calendar entries in the next 10 days.' }}
+            entries: >
+              {% set entries = state_attr('sensor.panda_green_waste_upcoming_services', 'entries') or [] %}
+              {% set today = now().date() %}
+              {% set cutoff = today + timedelta(days=9) %}
+              {% set ns = namespace(items=[]) %}
+              {% for entry in entries %}
+                {% set start = entry.start if entry.start is defined else none %}
+                {% if start %}
+                  {% set entry_date = as_datetime(start).date() %}
+                  {% if today <= entry_date <= cutoff %}
+                    {% set subject = (entry.subject if entry.subject is defined else '') %}
+                    {% set friendly = subject
+                      | replace('RTSC4413266', 'MSW Municipal Mixed')
+                      | replace('RTSC4413265', 'Mixed Packaging') %}
+                    {% if friendly.startswith('Route Visit:') %}
+                      {% set entry_type = 'Route Visit' %}
+                    {% elif friendly.startswith('Lift Event:') %}
+                      {% set entry_type = 'Lift Event' %}
+                    {% else %}
+                      {% set entry_type = 'Other' %}
+                    {% endif %}
+                    {% set item = dict(
+                      date=entry_date.strftime('%d/%m/%Y'),
+                      type=entry_type,
+                      subject=friendly
+                    ) %}
+                    {% set ns.items = ns.items + [item] %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+              {{ ns.items }}
 
   script:
     panda_order_mixed_packaging:
