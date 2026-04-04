@@ -1,9 +1,10 @@
 {
   "domain": "panda_green_waste",
   "name": "Panda Green Waste",
-  "codeowners": [],
+  "codeowners": ["@cthloconnor"],
   "config_flow": true,
   "documentation": "https://pandagreenwaste-portal.amcsplatform.com/",
+  "issue_tracker": "https://github.com/cthloconnor/panda-home-assistant/issues",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "loggers": ["custom_components.panda_green_waste"],
