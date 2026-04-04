@@ -1,0 +1,12 @@
+{
+  "domain": "panda_green_waste",
+  "name": "Panda Green Waste",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://pandagreenwaste-portal.amcsplatform.com/",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "loggers": ["custom_components.panda_green_waste"],
+  "requirements": [],
+  "version": "0.1.0"
+}

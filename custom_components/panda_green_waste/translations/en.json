@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Panda Green Waste",
+        "description": "Connect to the Panda customer portal.",
+        "data": {
+          "name": "Name",
+          "username": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid login details",
+      "unknown": "Unexpected error"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Panda Green Waste options",
+        "data": {
+          "scan_interval": "Refresh interval in seconds"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "next_collection": {
+        "name": "Next collection"
+      },
+      "upcoming_services": {
+        "name": "Upcoming services"
+      },
+      "today_services": {
+        "name": "Today's services"
+      },
+      "service_summary_field_count": {
+        "name": "Service summary fields"
+      }
+    }
+  }

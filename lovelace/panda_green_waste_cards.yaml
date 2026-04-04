@@ -1,0 +1,76 @@
+views:
+  - title: Panda
+    path: panda
+    cards:
+      - type: vertical-stack
+        cards:
+          - type: markdown
+            title: Panda Collections
+            content: >-
+              **Last ordered:** {{ states('sensor.panda_last_ordered_collection') }}
+
+              **Access window:** {{ state_attr('sensor.panda_last_ordered_collection', 'access_window') or '-' }}
+
+              **Ordered at:** {{ state_attr('sensor.panda_last_ordered_collection', 'ordered_at') or '-' }}
+          - type: grid
+            title: Order Collection
+            columns: 2
+            square: false
+            cards:
+              - type: button
+                name: Mixed Packaging
+                icon: mdi:recycle
+                tap_action:
+                  action: call-service
+                  service: script.panda_order_mixed_packaging
+              - type: button
+                name: MSW Municipal Mixed
+                icon: mdi:trash-can
+                tap_action:
+                  action: call-service
+                  service: script.panda_order_msw_municipal_mixed
+              - type: button
+                name: Glass
+                icon: mdi:glass-fragile
+                tap_action:
+                  action: call-service
+                  service: script.panda_order_glass
+              - type: button
+                name: 140L Food Wasre BIN
+                icon: mdi:food-apple
+                tap_action:
+                  action: call-service
+                  service: script.panda_order_food_waste_bin
+          - type: markdown
+            title: Today
+            content: >-
+              {% set entries = state_attr('sensor.panda_green_waste_today_services', 'entries') or [] %}
+              {% if entries %}
+              {% for entry in entries %}
+              - **{{ entry.subject }}**
+                {% if entry.start %} at {{ as_datetime(entry.start).strftime('%H:%M') }}{% endif %}
+                {% if entry.status %} — {{ entry.status }}{% endif %}
+              {% endfor %}
+              {% else %}
+              No Panda entries for today.
+              {% endif %}
+          - type: markdown
+            title: Upcoming
+            content: >-
+              {% set entries = state_attr('sensor.panda_green_waste_upcoming_services', 'entries') or [] %}
+              {% if entries %}
+              {% for entry in entries[:6] %}
+              - **{{ entry.subject }}** — {{ as_datetime(entry.start).strftime('%d %b %Y') }}
+                {% if entry.status %} — {{ entry.status }}{% endif %}
+              {% endfor %}
+              {% else %}
+              No upcoming Panda entries found.
+              {% endif %}
+          - type: entities
+            title: Panda Sensors
+            entities:
+              - entity: sensor.panda_last_ordered_collection
+              - entity: sensor.panda_green_waste_next_collection
+              - entity: sensor.panda_green_waste_today_services
+              - entity: sensor.panda_green_waste_upcoming_services
+              - entity: calendar.panda_green_waste_calendar

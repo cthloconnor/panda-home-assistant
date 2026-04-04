@@ -1,0 +1,34 @@
+book_pickup:
+  name: Book pickup
+  description: Submit a Panda Service summary pickup request with the fixed access window and optional extra payload fields.
+  fields:
+    pickup_type:
+      required: true
+      example: Mixed Packaging
+      selector:
+        select:
+          options:
+            - Mixed Packaging
+            - MSW Municipal Mixed
+            - Glass
+            - 140L Food Wasre BIN
+    access_start_time:
+      required: false
+      example: "09:00"
+      selector:
+        text:
+    access_end_time:
+      required: false
+      example: "23:00"
+      selector:
+        text:
+    payload:
+      required: false
+      example:
+        CustomerDetails.Notes: "Please collect from front gate"
+      selector:
+        object:
+
+refresh:
+  name: Refresh
+  description: Force a refresh of Panda calendar and service-summary data.

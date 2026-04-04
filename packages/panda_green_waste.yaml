@@ -1,0 +1,153 @@
+panda_green_waste:
+  template:
+    - sensor:
+        - name: Panda Today Subjects
+          unique_id: panda_today_subjects
+          state: >
+            {% set entries = state_attr('sensor.panda_green_waste_today_services', 'entries') or [] %}
+            {{ entries | count }}
+          attributes:
+            summary: >
+              {% set entries = state_attr('sensor.panda_green_waste_today_services', 'entries') or [] %}
+              {% if entries %}
+                {{ entries | map(attribute='subject') | list | join(', ') }}
+              {% else %}
+                No Panda calendar entries today
+              {% endif %}
+            entries: >
+              {{ state_attr('sensor.panda_green_waste_today_services', 'entries') or [] }}
+        - name: Panda Last Ordered Collection
+          unique_id: panda_last_ordered_collection_summary
+          state: >
+            {{ states('input_text.panda_last_ordered_collection') }}
+          attributes:
+            access_window: >
+              {{ states('input_text.panda_last_ordered_access_window') }}
+            ordered_at: >
+              {{ states('input_text.panda_last_ordered_at') }}
+
+  script:
+    panda_order_mixed_packaging:
+      alias: Panda Order Mixed Packaging
+      sequence:
+        - service: panda_green_waste.book_pickup
+          data:
+            pickup_type: Mixed Packaging
+            access_start_time: "09:00"
+            access_end_time: "23:00"
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_collection
+          data:
+            value: Mixed Packaging
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_access_window
+          data:
+            value: 09:00 to 23:00
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_at
+          data:
+            value: "{{ now().strftime('%Y-%m-%d %H:%M') }}"
+
+    panda_order_msw_municipal_mixed:
+      alias: Panda Order MSW Municipal Mixed
+      sequence:
+        - service: panda_green_waste.book_pickup
+          data:
+            pickup_type: MSW Municipal Mixed
+            access_start_time: "09:00"
+            access_end_time: "23:00"
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_collection
+          data:
+            value: MSW Municipal Mixed
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_access_window
+          data:
+            value: 09:00 to 23:00
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_at
+          data:
+            value: "{{ now().strftime('%Y-%m-%d %H:%M') }}"
+
+    panda_order_glass:
+      alias: Panda Order Glass
+      sequence:
+        - service: panda_green_waste.book_pickup
+          data:
+            pickup_type: Glass
+            access_start_time: "09:00"
+            access_end_time: "23:00"
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_collection
+          data:
+            value: Glass
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_access_window
+          data:
+            value: 09:00 to 23:00
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_at
+          data:
+            value: "{{ now().strftime('%Y-%m-%d %H:%M') }}"
+
+    panda_order_food_waste_bin:
+      alias: Panda Order 140L Food Wasre BIN
+      sequence:
+        - service: panda_green_waste.book_pickup
+          data:
+            pickup_type: 140L Food Wasre BIN
+            access_start_time: "09:00"
+            access_end_time: "23:00"
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_collection
+          data:
+            value: 140L Food Wasre BIN
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_access_window
+          data:
+            value: 09:00 to 23:00
+        - service: input_text.set_value
+          target:
+            entity_id: input_text.panda_last_ordered_at
+          data:
+            value: "{{ now().strftime('%Y-%m-%d %H:%M') }}"
+
+  automation:
+    - id: panda_calendar_refresh_every_6_hours
+      alias: Panda Calendar Refresh Every 6 Hours
+      trigger:
+        - platform: time_pattern
+          hours: "/6"
+      action:
+        - service: panda_green_waste.refresh
+
+  input_select:
+    panda_collection_type:
+      name: Panda Collection Type
+      options:
+        - Mixed Packaging
+        - MSW Municipal Mixed
+        - Glass
+        - 140L Food Wasre BIN
+
+  input_text:
+    panda_last_ordered_collection:
+      name: Panda Last Ordered Collection
+      max: 100
+    panda_last_ordered_access_window:
+      name: Panda Last Ordered Access Window
+      max: 50
+    panda_last_ordered_at:
+      name: Panda Last Ordered At
+      max: 50
