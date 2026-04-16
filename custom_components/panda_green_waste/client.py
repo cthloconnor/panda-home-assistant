@@ -329,7 +329,12 @@ class PandaGreenWasteClient:
         async with self._session.post(
             urljoin(self._base_url, CREATE_SERVICE_JOBS_PATH),
             data=create_form,
-            headers={"Referer": urljoin(self._base_url, create_path)},
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": self._base_url,
+                "Referer": urljoin(self._base_url, create_path),
+            },
         ) as response:
             details_html = await response.text()
             response.raise_for_status()
@@ -337,8 +342,19 @@ class PandaGreenWasteClient:
         if self._looks_logged_out(details_html):
             self._logged_in = False
             raise PandaGreenWasteAuthError("Panda session expired while creating the pickup.")
-        if "service job details" not in self._clean_text(details_html).casefold():
-            raise PandaGreenWasteError("Panda did not open the final Service Job Details step.")
+        details_text = self._clean_text(details_html)
+        if "service job details" not in details_text.casefold():
+            details_html = await self._fetch_text(
+                SERVICE_JOB_DETAILS_PATH,
+                retry_on_auth=True,
+                headers={"Referer": urljoin(self._base_url, create_path)},
+            )
+            details_text = self._clean_text(details_html)
+        if "service job details" not in details_text.casefold():
+            raise PandaGreenWasteError(
+                "Panda did not open the final Service Job Details step. "
+                f"Page said: {details_text[:300] or 'empty response'}"
+            )
 
         details_form = self._extract_form_fields(
             details_html,
@@ -358,7 +374,12 @@ class PandaGreenWasteClient:
         async with self._session.post(
             urljoin(self._base_url, SERVICE_JOB_DETAILS_PATH),
             data=details_form,
-            headers={"Referer": urljoin(self._base_url, SERVICE_JOB_DETAILS_PATH)},
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": self._base_url,
+                "Referer": urljoin(self._base_url, SERVICE_JOB_DETAILS_PATH),
+            },
         ) as response:
             final_html = await response.text()
             response.raise_for_status()
@@ -599,9 +620,9 @@ class PandaGreenWasteClient:
         for key, value in fields:
             if key.endswith(".IsSelected"):
                 if selected_seen:
-                    marked.append((key, "False"))
+                    marked.append((key, "false"))
                 else:
-                    marked.append((key, "True"))
+                    marked.append((key, "true"))
                     selected_seen = True
                 continue
             marked.append((key, value))
