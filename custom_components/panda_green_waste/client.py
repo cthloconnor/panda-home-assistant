@@ -72,6 +72,15 @@ _PICKUP_TARGETS: dict[str, dict[str, str]] = {
 
 _ACCESS_DAYS_ALL_WEEK = "1,2,3,4,5,6,7"
 
+_BROWSER_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    ),
+}
+
 
 class PandaGreenWasteError(Exception):
     """Base integration error."""
@@ -287,6 +296,7 @@ class PandaGreenWasteClient:
         """Create a pickup by following the portal's Service Summary workflow."""
         await self._ensure_login()
         await self._set_default_site()
+        await self._prime_service_summary()
 
         target = self._pickup_target(pickup_type)
         create_path = (
@@ -296,10 +306,21 @@ class PandaGreenWasteClient:
             f"&containerTypeId={target['container_type_id']}"
             "&liftQuantity=1"
         )
-        create_html = await self._fetch_text(create_path, retry_on_auth=True)
-        create_form = self._extract_form_fields(create_html, form_name="CreateServiceJob")
+        create_html = await self._fetch_text(
+            create_path,
+            retry_on_auth=True,
+            headers={"Referer": urljoin(self._base_url, SERVICE_SUMMARY_PATH + "/")},
+        )
+        create_form = self._extract_form_fields(
+            create_html,
+            form_name="CreateServiceJob",
+            required_fields=("SiteOrderId", "ActionId", "ContainerTypeId"),
+        )
         if not create_form:
-            raise PandaGreenWasteError(f"Panda did not return a create-service form for {target['label']}.")
+            page_text = self._clean_text(create_html)[:300] or "empty response"
+            raise PandaGreenWasteError(
+                f"Panda did not return a create-service form for {target['label']}. Page said: {page_text}"
+            )
 
         create_form = self._mark_first_service_product_selected(create_form)
         if payload:
@@ -319,7 +340,11 @@ class PandaGreenWasteClient:
         if "service job details" not in self._clean_text(details_html).casefold():
             raise PandaGreenWasteError("Panda did not open the final Service Job Details step.")
 
-        details_form = self._extract_form_fields(details_html, form_name="ServiceJobDetailsSubmit")
+        details_form = self._extract_form_fields(
+            details_html,
+            form_name="ServiceJobDetailsSubmit",
+            required_fields=("__RequestVerificationToken", "SelectedServiceProductPriceId", "SiteOrderId"),
+        )
         if not details_form:
             raise PandaGreenWasteError("Panda did not return the final Service Job Details form.")
 
@@ -386,6 +411,11 @@ class PandaGreenWasteClient:
         products_html = await self._fetch_text(PRODUCTS_PATH, retry_on_auth=True)
         return calendar_html, summary_html, products_html
 
+    async def _prime_service_summary(self) -> None:
+        """Open the same portal pages the browser visits before the create form."""
+        await self._fetch_text("/dashboard", retry_on_auth=True)
+        await self._fetch_text(SERVICE_SUMMARY_PATH + "/", retry_on_auth=True)
+
     async def _fetch_calendar_entries(self) -> list[PandaCalendarEntry]:
         if not self._site_id or not self._site_name:
             return []
@@ -450,12 +480,24 @@ class PandaGreenWasteClient:
         async with self._session.post(
             urljoin(self._base_url, UPDATE_DEFAULT_SITE_PATH),
             json={"selectedCustomerSiteId": int(self._site_id)},
-            headers={"Content-Type": "application/json; charset=utf-8"},
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": urljoin(self._base_url, "/dashboard"),
+            },
         ) as response:
             response.raise_for_status()
 
-    async def _fetch_text(self, path: str, retry_on_auth: bool = False) -> str:
-        async with self._session.get(urljoin(self._base_url, path)) as response:
+    async def _fetch_text(
+        self,
+        path: str,
+        retry_on_auth: bool = False,
+        headers: dict[str, str] | None = None,
+    ) -> str:
+        request_headers = dict(_BROWSER_HEADERS)
+        if headers:
+            request_headers.update(headers)
+        async with self._session.get(urljoin(self._base_url, path), headers=request_headers) as response:
             text = await response.text()
             try:
                 response.raise_for_status()
@@ -466,7 +508,7 @@ class PandaGreenWasteClient:
             _LOGGER.debug("Portal returned logged-out markup for %s, retrying after login", path)
             self._logged_in = False
             await self.async_login()
-            return await self._fetch_text(path, retry_on_auth=False)
+            return await self._fetch_text(path, retry_on_auth=False, headers=headers)
 
         return text
 
@@ -531,14 +573,23 @@ class PandaGreenWasteClient:
         return parser.values
 
     @staticmethod
-    def _extract_form_fields(html: str, form_name: str | None = None) -> list[tuple[str, str]]:
+    def _extract_form_fields(
+        html: str,
+        form_name: str | None = None,
+        required_fields: tuple[str, ...] = (),
+    ) -> list[tuple[str, str]]:
         parser = _FormExtractor()
         parser.feed(html)
+        fallback: list[tuple[str, str]] = []
         for form in parser.forms:
             attrs = form["attrs"]
+            fields = list(form["fields"])
             if form_name is None or attrs.get("name") == form_name or attrs.get("id") == form_name:
-                return list(form["fields"])
-        return []
+                return fields
+            field_names = {key for key, _value in fields}
+            if required_fields and all(required in field_names for required in required_fields):
+                fallback = fields
+        return fallback
 
     @staticmethod
     def _mark_first_service_product_selected(fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
