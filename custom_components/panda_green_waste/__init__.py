@@ -16,6 +16,8 @@ from .const import (
     DEFAULT_ACCESS_END_TIME,
     DEFAULT_ACCESS_START_TIME,
     CONF_PASSWORD,
+    CONF_SITE_ID,
+    CONF_SITE_NAME,
     CONF_USERNAME,
     DATA_CLIENT,
     DATA_COORDINATOR,
@@ -48,6 +50,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         session=session,
         username=entry.data[CONF_USERNAME],
         password=entry.data[CONF_PASSWORD],
+        site_id=entry.data.get(CONF_SITE_ID),
+        site_name=entry.data.get(CONF_SITE_NAME),
     )
     coordinator = PandaGreenWasteCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
@@ -91,21 +95,38 @@ def _async_register_services(hass: HomeAssistant) -> None:
         access_end_time = call.data["access_end_time"]
         payload = call.data.get("payload") or {}
         for entry_id, data in hass.data.get(DOMAIN, {}).items():
-            result = await data[DATA_CLIENT].async_book_pickup(
-                pickup_type=pickup_type,
-                access_start_time=access_start_time,
-                access_end_time=access_end_time,
-                payload=payload,
-            )
-            _LOGGER.info("Panda pickup submission result: %s", result)
-            await data[DATA_COORDINATOR].async_request_refresh()
+            try:
+                result = await data[DATA_CLIENT].async_book_pickup(
+                    pickup_type=pickup_type,
+                    access_start_time=access_start_time,
+                    access_end_time=access_end_time,
+                    payload=payload,
+                )
+                _LOGGER.info("Panda pickup submission result: %s", result)
+                await data[DATA_COORDINATOR].async_request_refresh()
+            except Exception as err:  # noqa: BLE001 - surface portal failures to HA notifications.
+                _LOGGER.exception("Panda pickup submission failed")
+                persistent_notification.async_create(
+                    hass,
+                    title="Panda booking failed",
+                    message=(
+                        f"Collection requested: {pickup_type}\n"
+                        f"Access window: {access_start_time} to {access_end_time}\n"
+                        f"Error: {err}"
+                    ),
+                    notification_id=f"{NOTIFICATION_ID_PREFIX}_{entry_id}",
+                )
+                continue
+
+            final_booking_confirmed = result.get("final_booking_confirmed", False)
             persistent_notification.async_create(
                 hass,
-                title="Panda booking prepared",
+                title="Panda booking not confirmed" if not final_booking_confirmed else "Panda booking confirmed",
                 message=(
-                    f"Collection: {pickup_type}\n"
+                    f"Collection requested: {pickup_type}\n"
                     f"Access window: {access_start_time} to {access_end_time}\n"
-                    f"Portal confirmation detected: {'Yes' if result['contains_confirmation'] else 'No'}"
+                    f"Final booking confirmed: {'Yes' if final_booking_confirmed else 'No'}\n"
+                    f"Portal message: {result.get('message', 'No message returned')}"
                 ),
                 notification_id=f"{NOTIFICATION_ID_PREFIX}_{entry_id}",
             )

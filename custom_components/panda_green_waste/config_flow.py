@@ -14,7 +14,18 @@ from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .client import PandaGreenWasteAuthError, PandaGreenWasteClient
-from .const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME, DEFAULT_NAME, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import (
+    CONF_PASSWORD,
+    CONF_SCAN_INTERVAL,
+    CONF_SITE_ID,
+    CONF_SITE_NAME,
+    CONF_USERNAME,
+    DEFAULT_NAME,
+    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SITE_ID,
+    DEFAULT_SITE_NAME,
+    DOMAIN,
+)
 
 
 async def _validate_input(hass, user_input: dict[str, Any]) -> dict[str, Any]:
@@ -22,6 +33,8 @@ async def _validate_input(hass, user_input: dict[str, Any]) -> dict[str, Any]:
         session=async_create_clientsession(hass),
         username=user_input[CONF_USERNAME],
         password=user_input[CONF_PASSWORD],
+        site_id=user_input[CONF_SITE_ID],
+        site_name=user_input[CONF_SITE_NAME],
     )
     await client.async_login()
     return {"title": user_input[CONF_NAME]}
@@ -51,6 +64,8 @@ class PandaGreenWasteConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_USERNAME: user_input[CONF_USERNAME],
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        CONF_SITE_ID: user_input[CONF_SITE_ID],
+                        CONF_SITE_NAME: user_input[CONF_SITE_NAME],
                     },
                 )
 
@@ -59,6 +74,8 @@ class PandaGreenWasteConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_NAME, default=DEFAULT_NAME): str,
                 vol.Required(CONF_USERNAME): str,
                 vol.Required(CONF_PASSWORD): str,
+                vol.Required(CONF_SITE_ID, default=DEFAULT_SITE_ID): str,
+                vol.Required(CONF_SITE_NAME, default=DEFAULT_SITE_NAME): str,
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)

@@ -7,7 +7,9 @@
         "data": {
           "name": "Name",
           "username": "Email",
-          "password": "Password"
+          "password": "Password",
+          "site_id": "Site ID",
+          "site_name": "Site name"
         }
       }
     },
@@ -37,6 +39,9 @@
       },
       "today_services": {
         "name": "Today's services"
+      },
+      "calendar_next_10_days": {
+        "name": "Calendar next 10 days"
       },
       "service_summary_field_count": {
         "name": "Service summary fields"

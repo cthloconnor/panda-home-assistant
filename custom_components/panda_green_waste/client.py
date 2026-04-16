@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from html import unescape
 from html.parser import HTMLParser
 import logging
@@ -15,14 +15,16 @@ from aiohttp import ClientResponseError, ClientSession
 
 from .const import (
     CALENDAR_PATH,
+    CALENDAR_EVENTS_PATH,
+    CREATE_SERVICE_JOBS_PATH,
     DEFAULT_ACCESS_END_TIME,
     DEFAULT_ACCESS_START_TIME,
-    DEFAULT_ORDER_OPTION,
-    DEFAULT_SERVICE_OPTION,
     ENTRY_LIMIT,
     LOGIN_PATH,
     PRODUCTS_PATH,
+    SERVICE_JOB_DETAILS_PATH,
     SERVICE_SUMMARY_PATH,
+    UPDATE_DEFAULT_SITE_PATH,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,6 +46,31 @@ _DATE_FORMATS = (
     "%Y-%m-%d %H:%M",
     "%d-%m-%Y",
 )
+
+_PICKUP_TARGETS: dict[str, dict[str, str]] = {
+    "mixed packaging": {
+        "label": "Mixed Packaging",
+        "site_order_id": "17310",
+        "container_type_id": "105",
+    },
+    "msw municipal mixed": {
+        "label": "MSW Municipal Mixed",
+        "site_order_id": "17311",
+        "container_type_id": "105",
+    },
+    "glass": {
+        "label": "Glass",
+        "site_order_id": "451296",
+        "container_type_id": "3",
+    },
+    "140l food wasre bin": {
+        "label": "140L Food Wasre BIN",
+        "site_order_id": "478523",
+        "container_type_id": "358",
+    },
+}
+
+_ACCESS_DAYS_ALL_WEEK = "1,2,3,4,5,6,7"
 
 
 class PandaGreenWasteError(Exception):
@@ -96,6 +123,77 @@ class _InputExtractor(HTMLParser):
             self._selected_option_value = None
 
 
+class _FormExtractor(HTMLParser):
+    """Extract ordered form fields without dropping duplicate MVC field names."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.forms: list[dict[str, Any]] = []
+        self._current_form: dict[str, Any] | None = None
+        self._current_textarea_name: str | None = None
+        self._current_textarea_chunks: list[str] = []
+        self._current_select_name: str | None = None
+        self._current_select_value: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {key: value for key, value in attrs if key}
+        tag_name = tag.lower()
+        if tag_name == "form":
+            self._current_form = {
+                "attrs": attr_map,
+                "fields": [],
+            }
+            return
+
+        if self._current_form is None:
+            return
+
+        if tag_name == "input":
+            field_type = (attr_map.get("type") or "text").casefold()
+            name = attr_map.get("name")
+            if name and field_type not in {"button", "submit", "reset", "image"}:
+                self._current_form["fields"].append((name, attr_map.get("value") or ""))
+            return
+
+        if tag_name == "textarea":
+            self._current_textarea_name = attr_map.get("name")
+            self._current_textarea_chunks = []
+            return
+
+        if tag_name == "select":
+            self._current_select_name = attr_map.get("name")
+            self._current_select_value = ""
+            return
+
+        if tag_name == "option" and self._current_select_name:
+            if "selected" in attr_map or attr_map.get("selected") is not None:
+                self._current_select_value = attr_map.get("value") or ""
+
+    def handle_data(self, data: str) -> None:
+        if self._current_textarea_name:
+            self._current_textarea_chunks.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_name = tag.lower()
+        if tag_name == "textarea" and self._current_form and self._current_textarea_name:
+            self._current_form["fields"].append(
+                (self._current_textarea_name, "".join(self._current_textarea_chunks))
+            )
+            self._current_textarea_name = None
+            self._current_textarea_chunks = []
+            return
+
+        if tag_name == "select" and self._current_form and self._current_select_name:
+            self._current_form["fields"].append((self._current_select_name, self._current_select_value or ""))
+            self._current_select_name = None
+            self._current_select_value = None
+            return
+
+        if tag_name == "form" and self._current_form is not None:
+            self.forms.append(self._current_form)
+            self._current_form = None
+
+
 @dataclass(slots=True)
 class PandaCalendarEntry:
     """Normalized future service item."""
@@ -125,10 +223,19 @@ class PandaPortalData:
 class PandaGreenWasteClient:
     """Thin client for the AMCS customer portal."""
 
-    def __init__(self, session: ClientSession, username: str, password: str) -> None:
+    def __init__(
+        self,
+        session: ClientSession,
+        username: str,
+        password: str,
+        site_id: str | None = None,
+        site_name: str | None = None,
+    ) -> None:
         self._session = session
         self._username = username
         self._password = password
+        self._site_id = site_id
+        self._site_name = site_name
         self._base_url = "https://pandagreenwaste-portal.amcsplatform.com"
         self._logged_in = False
 
@@ -161,8 +268,11 @@ class PandaGreenWasteClient:
         """Fetch and normalize service data."""
         await self._ensure_login()
         calendar_html, summary_html, products_html = await self._fetch_pages()
+        calendar_entries = await self._fetch_calendar_entries()
+        if not calendar_entries:
+            calendar_entries = self._parse_calendar_entries(calendar_html)
         return PandaPortalData(
-            calendar_entries=self._parse_calendar_entries(calendar_html),
+            calendar_entries=calendar_entries,
             service_summary_fields=self._extract_inputs(summary_html),
             available_services=self._parse_available_services(products_html),
         )
@@ -174,94 +284,97 @@ class PandaGreenWasteClient:
         access_end_time: str = DEFAULT_ACCESS_END_TIME,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Submit the current service summary form with pickup defaults."""
+        """Create a pickup by following the portal's Service Summary workflow."""
         await self._ensure_login()
-        summary_html = await self._fetch_text(SERVICE_SUMMARY_PATH)
-        form_data = self._extract_inputs(summary_html)
-        applied_keys = self._apply_pickup_defaults(
-            form_data=form_data,
-            pickup_type=pickup_type,
+        await self._set_default_site()
+
+        target = self._pickup_target(pickup_type)
+        create_path = (
+            "/service-summary/create-service-jobs"
+            f"?siteOrderId={target['site_order_id']}"
+            "&actionId=9&actionName=Lift&serviceId=4"
+            f"&containerTypeId={target['container_type_id']}"
+            "&liftQuantity=1"
+        )
+        create_html = await self._fetch_text(create_path, retry_on_auth=True)
+        create_form = self._extract_form_fields(create_html, form_name="CreateServiceJob")
+        if not create_form:
+            raise PandaGreenWasteError(f"Panda did not return a create-service form for {target['label']}.")
+
+        create_form = self._mark_first_service_product_selected(create_form)
+        if payload:
+            create_form.extend((key, "" if value is None else str(value)) for key, value in payload.items())
+
+        async with self._session.post(
+            urljoin(self._base_url, CREATE_SERVICE_JOBS_PATH),
+            data=create_form,
+            headers={"Referer": urljoin(self._base_url, create_path)},
+        ) as response:
+            details_html = await response.text()
+            response.raise_for_status()
+
+        if self._looks_logged_out(details_html):
+            self._logged_in = False
+            raise PandaGreenWasteAuthError("Panda session expired while creating the pickup.")
+        if "service job details" not in self._clean_text(details_html).casefold():
+            raise PandaGreenWasteError("Panda did not open the final Service Job Details step.")
+
+        details_form = self._extract_form_fields(details_html, form_name="ServiceJobDetailsSubmit")
+        if not details_form:
+            raise PandaGreenWasteError("Panda did not return the final Service Job Details form.")
+
+        details_form = self._apply_access_times(
+            details_form,
             access_start_time=access_start_time,
             access_end_time=access_end_time,
         )
-        if payload:
-            form_data.update({key: "" if value is None else str(value) for key, value in payload.items()})
+        details_form.append(("SkipsButton", "Finish"))
 
         async with self._session.post(
-            urljoin(self._base_url, SERVICE_SUMMARY_PATH),
-            data=form_data,
-            headers={"Referer": urljoin(self._base_url, SERVICE_SUMMARY_PATH)},
+            urljoin(self._base_url, SERVICE_JOB_DETAILS_PATH),
+            data=details_form,
+            headers={"Referer": urljoin(self._base_url, SERVICE_JOB_DETAILS_PATH)},
         ) as response:
-            text = await response.text()
+            final_html = await response.text()
             response.raise_for_status()
 
+        final_text = self._clean_text(final_html)
+        lowered_final = final_text.casefold()
+        validation_failed = any(
+            marker in lowered_final
+            for marker in (
+                "field is required",
+                "select at least one day",
+                "validation-summary-errors",
+                "access start time must",
+                "access end time must",
+                "account is invalid",
+            )
+        )
+        final_booking_confirmed = (
+            not validation_failed
+            and "service job details" not in lowered_final
+            and "service summary" in lowered_final
+        )
         return {
             "ok": True,
             "status": response.status,
-            "contains_confirmation": "confirmed" in text.lower() or "success" in text.lower(),
-            "contains_session_expired": "session-expired" in text.lower(),
-            "pickup_type": pickup_type,
-            "applied_keys": sorted(applied_keys),
-        }
-
-    def _apply_pickup_defaults(
-        self,
-        form_data: dict[str, str],
-        pickup_type: str,
-        access_start_time: str,
-        access_end_time: str,
-    ) -> set[str]:
-        applied_keys: set[str] = set()
-
-        semantic_values = {
-            "pickup_type": pickup_type,
-            "service_option": DEFAULT_SERVICE_OPTION,
-            "order_option": DEFAULT_ORDER_OPTION,
+            "pickup_type": target["label"],
+            "site_order_id": target["site_order_id"],
             "access_start_time": access_start_time,
             "access_end_time": access_end_time,
+            "contains_session_expired": "session-expired" in lowered_final,
+            "validation_failed": validation_failed,
+            "final_booking_confirmed": final_booking_confirmed,
+            "message": "Panda final Finish step completed." if final_booking_confirmed else final_text[:500],
         }
 
-        candidate_matches = {
-            "pickup_type": (
-                "mixed packaging",
-                "msw municipal mixed",
-                "glass",
-                "140l food wasre bin",
-                "pickup_type",
-                "service_type",
-                "material",
-                "waste_stream",
-            ),
-            "service_option": ("service", "serviceoption", "service_option", "services"),
-            "order_option": ("order", "action", "requesttype", "request_type"),
-            "access_start_time": ("accessstarttime", "access_start_time", "access start", "accessfrom", "starttime"),
-            "access_end_time": ("accessendtime", "access_end_time", "access end", "accessto", "endtime"),
-        }
-
-        lowered_keys = {key: key.casefold() for key in form_data}
-        for semantic_name, fragments in candidate_matches.items():
-            value = semantic_values[semantic_name]
-            for original_key, lowered_key in lowered_keys.items():
-                if any(fragment in lowered_key for fragment in fragments):
-                    form_data[original_key] = value
-                    applied_keys.add(original_key)
-
-        fallback_values = {
-            "PickupType": pickup_type,
-            "ServiceType": pickup_type,
-            "SelectedService": DEFAULT_SERVICE_OPTION,
-            "Service": DEFAULT_SERVICE_OPTION,
-            "OrderType": DEFAULT_ORDER_OPTION,
-            "RequestType": DEFAULT_ORDER_OPTION,
-            "AccessStartTime": access_start_time,
-            "AccessEndTime": access_end_time,
-        }
-        for key, value in fallback_values.items():
-            if key not in form_data:
-                form_data[key] = value
-            applied_keys.add(key)
-
-        return applied_keys
+    @staticmethod
+    def _pickup_target(pickup_type: str) -> dict[str, str]:
+        target = _PICKUP_TARGETS.get(pickup_type.casefold())
+        if not target:
+            raise PandaGreenWasteError(f"Unsupported Panda pickup type: {pickup_type}")
+        return target
 
     async def _ensure_login(self) -> None:
         if not self._logged_in:
@@ -272,6 +385,74 @@ class PandaGreenWasteClient:
         summary_html = await self._fetch_text(SERVICE_SUMMARY_PATH, retry_on_auth=True)
         products_html = await self._fetch_text(PRODUCTS_PATH, retry_on_auth=True)
         return calendar_html, summary_html, products_html
+
+    async def _fetch_calendar_entries(self) -> list[PandaCalendarEntry]:
+        if not self._site_id or not self._site_name:
+            return []
+
+        await self._set_default_site()
+        start = datetime.now(UTC).date().replace(day=1)
+        end = start + timedelta(days=62)
+        payload = {
+            "Start": f"{start.isoformat()}T00:00:00.000Z",
+            "End": f"{end.isoformat()}T00:00:00.000Z",
+            "SiteId": str(self._site_id),
+            "SiteIdString": self._site_name,
+        }
+        async with self._session.post(
+            urljoin(self._base_url, CALENDAR_EVENTS_PATH),
+            json=payload,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Requested-With": "XMLHttpRequest",
+                "departmentId": "0",
+                "Referer": urljoin(self._base_url, CALENDAR_PATH),
+            },
+        ) as response:
+            text = await response.text()
+            response.raise_for_status()
+
+        if not text.strip():
+            return []
+
+        try:
+            import json
+
+            data = json.loads(text)
+        except ValueError:
+            _LOGGER.debug("Panda calendar events endpoint returned non-JSON content")
+            return []
+
+        entries: list[PandaCalendarEntry] = []
+        for row in data:
+            if not row.get("ShowActivityEvent", True):
+                continue
+            start_value = row.get("start")
+            title = row.get("title")
+            if not start_value or not title:
+                continue
+            start_dt = self._parse_date(str(start_value))
+            if not start_dt:
+                continue
+            entries.append(
+                PandaCalendarEntry(
+                    subject=str(title),
+                    start=start_dt,
+                    raw=row,
+                )
+            )
+        entries.sort(key=lambda item: item.start)
+        return entries[:ENTRY_LIMIT]
+
+    async def _set_default_site(self) -> None:
+        if not self._site_id:
+            return
+        async with self._session.post(
+            urljoin(self._base_url, UPDATE_DEFAULT_SITE_PATH),
+            json={"selectedCustomerSiteId": int(self._site_id)},
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        ) as response:
+            response.raise_for_status()
 
     async def _fetch_text(self, path: str, retry_on_auth: bool = False) -> str:
         async with self._session.get(urljoin(self._base_url, path)) as response:
@@ -296,6 +477,7 @@ class PandaGreenWasteClient:
 
     def _parse_calendar_entries(self, html: str) -> list[PandaCalendarEntry]:
         entries: list[PandaCalendarEntry] = []
+        today = datetime.now(UTC).date()
 
         for table_id in ("CollectionHistoryTable", "TicketHistoryTable"):
             headers, rows = self._extract_table(html, table_id)
@@ -303,7 +485,7 @@ class PandaGreenWasteClient:
                 continue
             for row in rows:
                 entry = self._row_to_entry(headers, row)
-                if entry and entry.start >= datetime.now(UTC):
+                if entry and entry.start.astimezone(UTC).date() >= today:
                     entries.append(entry)
 
         if not entries:
@@ -347,6 +529,62 @@ class PandaGreenWasteClient:
         parser = _InputExtractor()
         parser.feed(html)
         return parser.values
+
+    @staticmethod
+    def _extract_form_fields(html: str, form_name: str | None = None) -> list[tuple[str, str]]:
+        parser = _FormExtractor()
+        parser.feed(html)
+        for form in parser.forms:
+            attrs = form["attrs"]
+            if form_name is None or attrs.get("name") == form_name or attrs.get("id") == form_name:
+                return list(form["fields"])
+        return []
+
+    @staticmethod
+    def _mark_first_service_product_selected(fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Mirror clicking the first product row before the portal posts to details."""
+        selected_seen = False
+        marked: list[tuple[str, str]] = []
+        for key, value in fields:
+            if key.endswith(".IsSelected"):
+                if selected_seen:
+                    marked.append((key, "False"))
+                else:
+                    marked.append((key, "True"))
+                    selected_seen = True
+                continue
+            marked.append((key, value))
+        return marked
+
+    @staticmethod
+    def _apply_access_times(
+        fields: list[tuple[str, str]],
+        access_start_time: str,
+        access_end_time: str,
+    ) -> list[tuple[str, str]]:
+        """Add the access-time collection generated by Panda's Knockout view model."""
+        skip_names = {
+            "AccessTime.Id",
+            "AccessTime.ParentId",
+            "AccessTime.AccessStartTime",
+            "AccessTime.AccessEndTime",
+            "AccessTime.AccessContact",
+            "AccessTime.AccessNotes",
+        }
+        cleaned = [(key, value) for key, value in fields if key not in skip_names]
+        cleaned.extend(
+            (
+                ("AccessTimes[0].Id", "0"),
+                ("AccessTimes[0].InEditMode", "false"),
+                ("AccessTimes[0].IsDeleted", "false"),
+                ("AccessTimes[0].AccessStartTime", access_start_time),
+                ("AccessTimes[0].AccessEndTime", access_end_time),
+                ("AccessTimes[0].AccessContact", ""),
+                ("AccessTimes[0].AccessNotes", ""),
+                ("AccessTimes[0].accessDaysString", _ACCESS_DAYS_ALL_WEEK),
+            )
+        )
+        return cleaned
 
     def _extract_table(self, html: str, table_id: str) -> tuple[list[str], list[list[str]]]:
         for match in _TABLE_RE.finditer(html):

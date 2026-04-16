@@ -1,6 +1,6 @@
 book_pickup:
   name: Book pickup
-  description: Submit a Panda Service summary pickup request with the fixed access window and optional extra payload fields.
+  description: Attempt a Panda Service summary pickup request. The service reports not confirmed unless the final Panda booking confirmation is proven.
   fields:
     pickup_type:
       required: true

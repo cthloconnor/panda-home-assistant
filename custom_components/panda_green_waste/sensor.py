@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, timedelta
 from typing import Callable
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
@@ -11,8 +11,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
-from .client import PandaPortalData
+from .client import PandaCalendarEntry, PandaPortalData
 from .const import DATA_COORDINATOR, DOMAIN
 from .coordinator import PandaGreenWasteCoordinator
 
@@ -23,6 +24,72 @@ class PandaSensorDescription(SensorEntityDescription):
 
     value_fn: Callable[[PandaPortalData], str | int | None]
     attributes_fn: Callable[[PandaPortalData], dict] | None = None
+
+
+def _friendly_subject(subject: str) -> str:
+    return (
+        subject.replace("RTSC4413266", "MSW Municipal Mixed")
+        .replace("RTSC4413265", "Mixed Packaging")
+        .strip()
+    )
+
+
+def _local_date(entry: PandaCalendarEntry):
+    return dt_util.as_local(entry.start).date()
+
+
+def _today_entries(data: PandaPortalData) -> list[PandaCalendarEntry]:
+    today = dt_util.now().date()
+    return [entry for entry in data.calendar_entries if _local_date(entry) == today]
+
+
+def _next_10_day_entries(data: PandaPortalData) -> list[PandaCalendarEntry]:
+    today = dt_util.now().date()
+    cutoff = today + timedelta(days=9)
+    return [entry for entry in data.calendar_entries if today <= _local_date(entry) <= cutoff]
+
+
+def _grouped_10_day_summary(data: PandaPortalData) -> str:
+    entries = _next_10_day_entries(data)
+    if not entries:
+        return "No Panda calendar entries in the next 10 days."
+
+    today = dt_util.now().date()
+    chunks: list[str] = []
+    for offset in range(10):
+        day = today + timedelta(days=offset)
+        route_visits: list[str] = []
+        lift_events: list[str] = []
+        for entry in entries:
+            if _local_date(entry) != day:
+                continue
+            friendly = _friendly_subject(entry.subject)
+            if friendly.startswith("Route Visit:"):
+                route_visits.append(friendly.replace("Route Visit:", "", 1).strip())
+            elif friendly.startswith("Lift Event:"):
+                lift_events.append(friendly.replace("Lift Event:", "", 1).strip())
+
+        if route_visits or lift_events:
+            lines = [day.strftime("%d/%m/%Y")]
+            if route_visits:
+                lines.append(f"Route Visit: {', '.join(route_visits)}")
+            if lift_events:
+                lines.append(f"Lift Event: {', '.join(lift_events)}")
+            chunks.append("\n".join(lines))
+
+    return "\n\n".join(chunks) if chunks else "No Panda calendar entries in the next 10 days."
+
+
+def _serialize_entry(entry: PandaCalendarEntry) -> dict:
+    return {
+        "subject": entry.subject,
+        "friendly_subject": _friendly_subject(entry.subject),
+        "start": entry.start.astimezone(UTC).isoformat(),
+        "end": entry.end.astimezone(UTC).isoformat() if entry.end else None,
+        "status": entry.status,
+        "date": _local_date(entry).strftime("%d/%m/%Y"),
+        "raw": entry.raw,
+    }
 
 
 SENSORS: tuple[PandaSensorDescription, ...] = (
@@ -52,14 +119,7 @@ SENSORS: tuple[PandaSensorDescription, ...] = (
         icon="mdi:calendar-clock",
         value_fn=lambda data: len(data.calendar_entries),
         attributes_fn=lambda data: {
-            "entries": [
-                {
-                    "subject": entry.subject,
-                    "start": entry.start.astimezone(UTC).isoformat(),
-                    "status": entry.status,
-                }
-                for entry in data.calendar_entries
-            ],
+            "entries": [_serialize_entry(entry) for entry in data.calendar_entries],
             "available_services": data.available_services,
         },
     ),
@@ -67,21 +127,22 @@ SENSORS: tuple[PandaSensorDescription, ...] = (
         key="today_services",
         translation_key="today_services",
         icon="mdi:calendar-today",
-        value_fn=lambda data: len(data.today_entries()),
+        value_fn=lambda data: len(_today_entries(data)),
         attributes_fn=lambda data: {
-            "entries": [
-                {
-                    "subject": entry.subject,
-                    "start": entry.start.astimezone(UTC).isoformat(),
-                    "end": entry.end.astimezone(UTC).isoformat() if entry.end else None,
-                    "status": entry.status,
-                    "raw": entry.raw,
-                }
-                for entry in data.today_entries()
-            ],
-            "subjects": [entry.subject for entry in data.today_entries()],
-            "statuses": [entry.status for entry in data.today_entries() if entry.status],
-            "count": len(data.today_entries()),
+            "entries": [_serialize_entry(entry) for entry in _today_entries(data)],
+            "subjects": [_friendly_subject(entry.subject) for entry in _today_entries(data)],
+            "statuses": [entry.status for entry in _today_entries(data) if entry.status],
+            "count": len(_today_entries(data)),
+        },
+    ),
+    PandaSensorDescription(
+        key="calendar_next_10_days",
+        translation_key="calendar_next_10_days",
+        icon="mdi:calendar-range",
+        value_fn=lambda data: len(_next_10_day_entries(data)),
+        attributes_fn=lambda data: {
+            "summary": _grouped_10_day_summary(data),
+            "entries": [_serialize_entry(entry) for entry in _next_10_day_entries(data)],
         },
     ),
     PandaSensorDescription(

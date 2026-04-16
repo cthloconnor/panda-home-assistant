@@ -4,14 +4,6 @@ views:
     cards:
       - type: vertical-stack
         cards:
-          - type: markdown
-            title: Panda Collections
-            content: >-
-              **Last ordered:** {{ states('sensor.panda_last_ordered_collection') }}
-
-              **Access window:** {{ state_attr('sensor.panda_last_ordered_collection', 'access_window') or '-' }}
-
-              **Ordered at:** {{ state_attr('sensor.panda_last_ordered_collection', 'ordered_at') or '-' }}
           - type: grid
             title: Order Collection
             columns: 2
@@ -22,35 +14,58 @@ views:
                 icon: mdi:recycle
                 tap_action:
                   action: call-service
-                  service: script.panda_order_mixed_packaging
+                  service: panda_green_waste.book_pickup
+                  data:
+                    pickup_type: Mixed Packaging
+                    access_start_time: "09:00"
+                    access_end_time: "23:00"
+                  confirmation:
+                    text: Order Mixed Packaging collection?
               - type: button
                 name: MSW Municipal Mixed
                 icon: mdi:trash-can
                 tap_action:
                   action: call-service
-                  service: script.panda_order_msw_municipal_mixed
+                  service: panda_green_waste.book_pickup
+                  data:
+                    pickup_type: MSW Municipal Mixed
+                    access_start_time: "09:00"
+                    access_end_time: "23:00"
+                  confirmation:
+                    text: Order MSW Municipal Mixed collection?
               - type: button
                 name: Glass
                 icon: mdi:glass-fragile
                 tap_action:
                   action: call-service
-                  service: script.panda_order_glass
+                  service: panda_green_waste.book_pickup
+                  data:
+                    pickup_type: Glass
+                    access_start_time: "09:00"
+                    access_end_time: "23:00"
+                  confirmation:
+                    text: Order Glass collection?
               - type: button
                 name: 140L Food Wasre BIN
                 icon: mdi:food-apple
                 tap_action:
                   action: call-service
-                  service: script.panda_order_food_waste_bin
+                  service: panda_green_waste.book_pickup
+                  data:
+                    pickup_type: 140L Food Wasre BIN
+                    access_start_time: "09:00"
+                    access_end_time: "23:00"
+                  confirmation:
+                    text: Order 140L Food Wasre BIN collection?
           - type: markdown
             title: Calendar Next 10 Days
             content: >-
-              {{ state_attr('sensor.panda_calendar_next_10_days', 'summary') or 'No Panda calendar entries in the next 10 days.' }}
+              {{ state_attr('sensor.panda_green_waste_calendar_next_10_days', 'summary') or 'No Panda calendar entries in the next 10 days.' }}
           - type: entities
             title: Panda Sensors
             entities:
-              - entity: sensor.panda_last_ordered_collection
-              - entity: sensor.panda_calendar_next_10_days
               - entity: sensor.panda_green_waste_next_collection
+              - entity: sensor.panda_green_waste_calendar_next_10_days
               - entity: sensor.panda_green_waste_today_services
               - entity: sensor.panda_green_waste_upcoming_services
               - entity: calendar.panda_green_waste_calendar
